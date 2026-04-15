@@ -1,0 +1,46 @@
+services:
+  # ---- Hindsight Vector Memory ----
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:latest
+    restart: unless-stopped
+    ports:
+      - "8888:8888"
+      - "9999:9999"
+    environment:
+      HINDSIGHT_API_LLM_PROVIDER: openai
+      HINDSIGHT_API_LLM_API_KEY: ${LLM_API_KEY}
+      HINDSIGHT_API_LLM_BASE_URL: ${LLM_BASE_URL:-https://api.ingham.ai/v1}
+      HINDSIGHT_API_LLM_MODEL: ${LLM_MODEL_NAME:-google/gemma-4-26B-A4B-it}
+      HINDSIGHT_API_SKIP_LLM_VERIFICATION: "true"
+
+  # ---- Backend (FastAPI) ----
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.ingham.ai/v1}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-google/gemma-4-26B-A4B-it}
+      HINDSIGHT_MODE: rest
+      HINDSIGHT_URL: http://hindsight:8888
+      HINDSIGHT_BANK: mirofish-v2
+    depends_on:
+      - hindsight
+
+  # ---- Frontend (React + nginx) ----
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000
+    depends_on:
+      - backend
