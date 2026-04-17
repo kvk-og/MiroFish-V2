@@ -64,13 +64,21 @@ export function CreateSimForm({ onSubmit, loading }: CreateSimFormProps) {
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Scenario */}
-        <Textarea
-          placeholder="e.g. A high-stakes tech conference in London where two rival startups are competing for investor attention..."
-          value={scenario}
-          onChange={(e) => setScenario(e.target.value)}
-          rows={4}
-          className="resize-none"
-        />
+        <div>
+          <Textarea
+            placeholder="e.g. A high-stakes tech conference in London where two rival startups are competing for investor attention..."
+            value={scenario}
+            onChange={(e) => setScenario(e.target.value)}
+            rows={4}
+            className="resize-none"
+          />
+          <div className="flex justify-between mt-2">
+            <span className={`text-xs ${scenario.length > 0 && scenario.length < 50 ? 'text-orange-500' : 'text-muted-foreground'}`}>
+              {scenario.length > 0 && scenario.length < 50 ? 'Please provide at least 50 characters for better context.' : ''}
+            </span>
+            <span className="text-xs text-muted-foreground">{scenario.length} characters</span>
+          </div>
+        </div>
 
         {/* Platform & Rounds */}
         <div className="flex items-center gap-4">
@@ -197,7 +205,7 @@ export function CreateSimForm({ onSubmit, loading }: CreateSimFormProps) {
 
         <Button
           onClick={handleSubmit}
-          disabled={loading || !scenario.trim()}
+          disabled={loading || scenario.trim().length < 50}
           className="w-full"
           size="lg"
         >

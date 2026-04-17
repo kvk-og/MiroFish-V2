@@ -104,9 +104,12 @@ class SimulationRunner:
                                 "simulation_id": self.sim_id,
                                 "round": round_num,
                                 "data": {
+                                    "id": action.id,
                                     "agent_name": agent.name,
+                                    "agent_id": agent.id,
                                     "action_type": action.action_type,
                                     "content": action.content,
+                                    "target_id": action.target_id,
                                     "timestamp": action.timestamp,
                                 }
                             })
@@ -153,6 +156,14 @@ class SimulationRunner:
         except Exception:
             context_str = "No prior context available."
 
+        # Get recent feed for threading context
+        recent_feed = self.agents.get_feed(limit=10)
+        recent_feed_context = [
+             {"post_id": f.get("id"), "agent": f.get("agent_name"), "content": f.get("content"), "action_type": f.get("action_type")} 
+             for f in recent_feed[-10:] if f.get("agent_id") != agent.id
+        ]
+        recent_feed_str = json.dumps(recent_feed_context) if recent_feed_context else "No recent posts from others."
+
         # 2. Build prompt
         messages = [
             {
@@ -161,13 +172,14 @@ class SimulationRunner:
                     f"You are {agent.name}. {agent.bio}. "
                     f"Personality: {', '.join(agent.personality_traits)}. "
                     f"You are participating in a social media simulation on {agent.platform}. "
-                    f"Respond ONLY with a JSON object: {{'action_type': 'post'|'reply'|'like', 'content': 'your message here'}}. "
+                    f"Respond ONLY with a JSON object: {{'action_type': 'post'|'reply'|'like', 'content': 'your message here', 'target_id': 'post_id if replying/liking else null'}}. "
+                    f"Consider the recent posts from others and reply directly if strongly agree or disagree, else make a standalone post. "
                     f"Do NOT use markdown code blocks. Just raw JSON."
                 )
             },
             {
                 "role": "user",
-                "content": f"Round {round_num}. Recent activity: {context_str}. What do you do?"
+                "content": f"Round {round_num}. Historical context: {context_str}. Recent community activity: {recent_feed_str}. What do you do?"
             }
         ]
 
@@ -185,6 +197,7 @@ class SimulationRunner:
             agent_id=agent.id,
             action_type=parsed.get("action_type", "post"),
             content=parsed.get("content", raw),
+            target_id=parsed.get("target_id", None),
             timestamp=datetime.now().isoformat(),
         )
 

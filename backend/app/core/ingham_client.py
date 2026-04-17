@@ -18,9 +18,9 @@ class InghamClient:
         if not self.api_key or not self.base_url:
             raise ValueError("Ingham API credentials missing in .env")
 
-    async def chat(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> str:
+    async def chat(self, messages: List[Dict[str, str]], temperature: float = 0.7, max_retries: int = 3) -> str:
         """
-        Sends a chat completion request to Ingham API.
+        Sends a chat completion request to Ingham API with exponential backoff.
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -34,17 +34,24 @@ class InghamClient:
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=payload
-            )
-            
-            if response.status_code != 200:
-                raise Exception(f"Ingham API Error ({response.status_code}): {response.text}")
-            
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+            for attempt in range(max_retries):
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=payload
+                    )
+                    
+                    if response.status_code != 200:
+                        raise Exception(f"Ingham API Error ({response.status_code}): {response.text}")
+                    
+                    data = response.json()
+                    return data["choices"][0]["message"]["content"]
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise e
+                    import asyncio
+                    await asyncio.sleep(2 ** attempt)
 
     async def stream_chat(self, messages: List[Dict[str, str]]):
         """

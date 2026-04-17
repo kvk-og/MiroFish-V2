@@ -12,6 +12,7 @@ interface SimControlsProps {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
+  onViewReport?: () => void;
   loading: boolean;
 }
 
@@ -25,7 +26,7 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
   }
 }
 
-export function SimControls({ status, agents, onStart, onPause, onResume, onStop, loading }: SimControlsProps) {
+export function SimControls({ status, agents, onStart, onPause, onResume, onStop, onViewReport, loading }: SimControlsProps) {
   if (!status) return null;
 
   const progress = status.max_rounds > 0 ? (status.current_round / status.max_rounds) * 100 : 0;
@@ -62,6 +63,12 @@ export function SimControls({ status, agents, onStart, onPause, onResume, onStop
             <Button onClick={onStop} disabled={loading} variant="destructive">Stop</Button>
           )}
         </div>
+        
+        {["completed", "stopped"].includes(status.status) && onViewReport && (
+            <Button onClick={onViewReport} disabled={loading} className="w-full mt-2" variant="default">
+                Generate Final Report
+            </Button>
+        )}
 
         <div>
           <p className="text-sm font-medium mb-2">Agents</p>

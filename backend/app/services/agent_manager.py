@@ -24,6 +24,7 @@ class AgentPersona(BaseModel):
 
 
 class AgentAction(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     agent_id: str
     action_type: str  # post, reply, like, share
     content: str
@@ -73,10 +74,12 @@ class AgentManager:
         for action in reversed(self.action_history[-limit:]):
             agent = self.agents.get(action.agent_id)
             feed.append({
+                "id": action.id,
                 "agent_name": agent.name if agent else "Unknown",
                 "agent_id": action.agent_id,
                 "action_type": action.action_type,
                 "content": action.content,
+                "target_id": action.target_id,
                 "timestamp": action.timestamp,
                 "platform": agent.platform if agent else "unknown",
             })

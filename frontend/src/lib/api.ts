@@ -25,6 +25,16 @@ export interface UserProfile {
   occupation?: string;
   social_handles?: string[];
   social_factors?: string;
+  survey_motivation?: string;
+  survey_domain?: string;
+  survey_history?: string;
+  survey_news_focus?: string;
+}
+
+export interface BotConfig {
+  creativity: string;
+  strictness: string;
+  devils_advocate: boolean;
 }
 
 export interface GraphNode {
@@ -57,10 +67,12 @@ export interface Simulation {
 }
 
 export interface FeedItem {
+  id?: string;
   agent_name: string;
   agent_id: string;
   action_type: string;
   content: string;
+  target_id?: string;
   timestamp: string;
   platform: string;
 }
@@ -73,15 +85,70 @@ export interface SimStatus {
   agents: number;
 }
 
+export interface SurveyQuestion {
+  id: string;
+  question: string;
+  options: string[];
+}
+
+export interface SimulationReport {
+  decision: string;
+  summary: string;
+  key_takeaways: string[];
+  analytics?: {
+    sentiment_trend: { round: number; sentiment: string; score: number }[];
+    opinion_distribution: { pro: number; anti: number; neutral: number };
+    opinion_shifts: { agent: string; from: string; to: string; reason: string }[];
+  };
+}
+
+export async function generateSurveyQuestions(scenario: string): Promise<SurveyQuestion[]> {
+  const res = await fetch(`${API_BASE}/simulation/survey_questions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scenario }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.questions;
+}
+
+export async function uploadContextDocument(file: File): Promise<{ filename: string; extracted_text: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  
+  const res = await fetch(`${API_BASE}/simulation/upload_context`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function createSimulation(
   scenario: string,
   platform: string = "twitter",
   maxRounds: number = 10,
   userProfile?: UserProfile,
+  numAgents: number = 3,
+  botConfig?: BotConfig
 ): Promise<Simulation> {
-  const body: Record<string, unknown> = { scenario, platform, max_rounds: maxRounds };
+  const body: Record<string, unknown> = { 
+    scenario, 
+    platform, 
+    max_rounds: maxRounds,
+    num_agents: numAgents
+  };
   if (userProfile) {
+    if (botConfig) {
+      userProfile.social_factors = (userProfile.social_factors || "") + 
+        ` [Bot Config: ${botConfig.creativity} creativity, ${botConfig.strictness} strictness${botConfig.devils_advocate ? ', DEVILS_ADVOCATE_MODE_ENABLED' : ''}]`;
+    }
     body.user_profile = userProfile;
+  } else if (botConfig) {
+    body.user_profile = {
+      social_factors: `[Bot Config: ${botConfig.creativity} creativity, ${botConfig.strictness} strictness${botConfig.devils_advocate ? ', DEVILS_ADVOCATE_MODE_ENABLED' : ''}]`
+    };
   }
   const res = await fetch(`${API_BASE}/simulation/create`, {
     method: "POST",
@@ -135,6 +202,25 @@ export async function getGraph(simId: string): Promise<GraphData> {
   // API returns {simulation_id, round, graph: {nodes, edges}}
   if (data.graph) return data.graph;
   return data;
+}
+
+export async function getSimulationReport(simId: string): Promise<SimulationReport> {
+  const res = await fetch(`${API_BASE}/simulation/${simId}/report`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.report;
+}
+
+export async function fetchHistory(): Promise<any> {
+  const res = await fetch(`${API_BASE}/simulations/history`);
+  if (!res.ok) throw new Error("Failed to fetch history");
+  return res.json();
+}
+
+export async function fetchHistoricalSimulation(simId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/simulations/history/${simId}`);
+  if (!res.ok) throw new Error("Failed to fetch historical simulation");
+  return res.json();
 }
 
 export function connectWebSocket(simId: string, onMessage: (data: any) => void): WebSocket {

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { CreateSimForm } from "./components/CreateSimForm";
+import { DiagnosticSurvey } from "./components/DiagnosticSurvey";
 import { LiveFeed } from "./components/LiveFeed";
 import { SimControls } from "./components/SimControls";
 import { KnowledgeGraph } from "./components/KnowledgeGraph";
+import { ReportViewer } from "./components/ReportViewer";
 import {
   createSimulation,
   startSimulation,
@@ -12,11 +13,13 @@ import {
   getSimulationStatus,
   getGraph,
   connectWebSocket,
+  getSimulationReport,
   type Simulation,
   type FeedItem,
   type SimStatus,
   type GraphData,
   type UserProfile,
+  type SimulationReport,
 } from "./lib/api";
 
 export default function App() {
@@ -24,7 +27,10 @@ export default function App() {
   const [status, setStatus] = useState<SimStatus | null>(null);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [graph, setGraph] = useState<GraphData | null>(null);
+  const [report, setReport] = useState<SimulationReport | null>(null);
+  const [showReport, setShowReport] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -91,10 +97,12 @@ export default function App() {
       if (data.event === "agent_action") {
         setFeed((prev) => [
           {
+            id: data.data.id,
             agent_name: data.data.agent_name,
             agent_id: data.data.agent_id || "",
             action_type: data.data.action_type,
             content: data.data.content,
+            target_id: data.data.target_id,
             timestamp: data.data.timestamp,
             platform: data.data.platform || "twitter",
           },
@@ -116,17 +124,17 @@ export default function App() {
       platform: string,
       maxRounds: number,
       userProfile?: UserProfile,
+      numAgents?: number,
+      botConfig?: { creativity: string; strictness: string; devils_advocate: boolean }
     ) => {
       setLoading(true);
       setError(null);
       setFeed([]);
       setGraph(null);
       try {
-        const result = await createSimulation(scenario, platform, maxRounds, userProfile);
+        const result = await createSimulation(scenario, platform, maxRounds, userProfile, numAgents || 3, botConfig);
         setSim(result);
-        // Set URL param so page can be reloaded
         window.history.replaceState({}, "", `?sim=${result.simulation_id}`);
-        // If the response includes graph data, set it immediately
         if (result.graph) {
           setGraph(result.graph);
         }
@@ -194,8 +202,28 @@ export default function App() {
     setStatus(null);
     setFeed([]);
     setGraph(null);
+    setReport(null);
+    setShowReport(false);
     setError(null);
   }, []);
+
+  const handleViewReport = useCallback(async () => {
+    if (!sim) return;
+    if (report) {
+      setShowReport(true);
+      return;
+    }
+    setReportLoading(true);
+    try {
+      const r = await getSimulationReport(sim.simulation_id);
+      setReport(r);
+      setShowReport(true);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setReportLoading(false);
+    }
+  }, [sim, report]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -203,7 +231,7 @@ export default function App() {
       <header className="border-b">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm">
+            <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-bold text-sm">
               MF
             </div>
             <h1 className="text-xl font-bold">MiroFish</h1>
@@ -230,7 +258,7 @@ export default function App() {
 
         {!sim ? (
           <div className="flex justify-center">
-            <CreateSimForm onSubmit={handleCreate} loading={loading} />
+            <DiagnosticSurvey onSubmit={handleCreate} loading={loading} />
           </div>
         ) : (
           <div className="space-y-6">
@@ -244,15 +272,19 @@ export default function App() {
                   onPause={handlePause}
                   onResume={handleResume}
                   onStop={handleStop}
-                  loading={loading}
+                  onViewReport={handleViewReport}
+                  loading={loading || reportLoading}
                 />
               </div>
               <div className="lg:col-span-2 min-h-[450px]">
                 {graph ? (
                   <KnowledgeGraph graph={graph} />
                 ) : (
-                  <div className="h-full flex items-center justify-center border border-dashed border-border rounded-lg text-muted-foreground text-sm">
-                    Waiting for graph data...
+                  <div className="h-full flex flex-col items-center justify-center border border-dashed border-border rounded-lg bg-muted/20 animate-pulse min-h-[450px]">
+                    <div className="w-16 h-16 rounded-full bg-muted-foreground/20 mb-4 flex items-center justify-center">
+                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground/50"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+                    </div>
+                    <span className="text-muted-foreground font-medium">Initializing knowledge graph...</span>
                   </div>
                 )}
               </div>
@@ -260,6 +292,12 @@ export default function App() {
 
             {/* Bottom row: Live Feed */}
             <LiveFeed feed={feed} />
+
+            {showReport && report && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-300">
+                <ReportViewer report={report} onClose={() => setShowReport(false)} />
+              </div>
+            )}
           </div>
         )}
       </main>

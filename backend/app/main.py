@@ -10,7 +10,7 @@ import uuid
 from typing import Dict, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -19,6 +19,8 @@ from .core.hindsight_client import HindsightClient
 from .services.orchestrator import SimulationOrchestrator
 from .services.agent_manager import AgentManager
 from .services.simulation_runner import SimulationRunner, SimulationStatus
+from .services.document_parser import parse_document
+from .db.database import init_db, save_simulation, get_simulations, get_simulation
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -42,6 +44,7 @@ ws_connections: Dict[str, list] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("MiroFish V2 API starting up...")
+    init_db()
     yield
     logger.info("MiroFish V2 API shutting down...")
 
@@ -77,6 +80,22 @@ async def broadcast_event(sim_id: str, data: dict):
 @app.get("/health")
 async def health():
     return {"status": "online", "engine": os.getenv("LLM_MODEL_NAME", "unknown"), "memory": os.getenv("HINDSIGHT_MODE", "memory"), "version": "2.0.0"}
+
+
+@app.post("/simulation/survey_questions")
+async def generate_survey_questions(payload: dict):
+    scenario = payload.get("scenario")
+    if not scenario:
+        raise HTTPException(status_code=400, detail="scenario is required")
+    questions = await orchestrator.generate_survey_questions(scenario)
+    return {"questions": questions}
+
+
+@app.post("/simulation/upload_context")
+async def upload_context(file: UploadFile = File(...)):
+    contents = await file.read()
+    text = parse_document(contents, file.filename)
+    return {"filename": file.filename, "extracted_text": text}
 
 
 @app.post("/simulation/create")
@@ -135,6 +154,9 @@ async def create_simulation(payload: dict):
     )
     runner.max_rounds = max_rounds
     runner.speed_ms = speed_ms
+    runner.world_facts = result["world_facts"]
+    runner.scenario = scenario
+    runner.platform = platform
 
     simulations[sim_id] = runner
 
@@ -225,6 +247,50 @@ async def get_graph(sim_id: str):
         "round": runner.current_round,
         "graph": runner.graph,
     }
+
+
+@app.get("/simulation/{sim_id}/report")
+async def get_report(sim_id: str):
+    """Generate and return a final GO/NO-GO report for the simulation."""
+    runner = simulations.get(sim_id)
+    if not runner:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    
+    feed = runner.agents.get_feed(limit=1000)
+    facts = getattr(runner, "world_facts", [])
+    
+    report = await orchestrator.generate_sim_report(facts=facts, feed=feed)
+    
+    # Save to history
+    save_simulation(
+        sim_id=sim_id,
+        scenario=getattr(runner, "scenario", "Unknown"),
+        platform=getattr(runner, "platform", "unknown"),
+        decision=report.get("decision", "UNKNOWN"),
+        summary=report.get("summary", ""),
+        report_analytics=report.get("analytics"),
+        graph=runner.graph,
+        feed=feed,
+        agents=[{"id": a.id, "name": a.name, "bio": a.bio, "platform": a.platform} for a in runner.agents.list_agents()]
+    )
+    
+    return {
+        "simulation_id": sim_id,
+        "report": report
+    }
+
+
+@app.get("/simulations/history")
+async def fetch_history():
+    return {"simulations": get_simulations()}
+
+
+@app.get("/simulations/history/{sim_id}")
+async def fetch_historical_simulation(sim_id: str):
+    sim = get_simulation(sim_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail="Historical simulation not found")
+    return {"simulation": sim}
 
 
 # --- WebSocket Endpoint ---

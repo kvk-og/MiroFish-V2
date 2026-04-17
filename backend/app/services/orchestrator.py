@@ -9,6 +9,9 @@ from typing import List, Dict, Any, Optional
 
 from ..core.ingham_client import InghamClient
 from ..core.hindsight_client import HindsightClient
+from pydantic import BaseModel
+from .agent_manager import AgentPersona
+from .web_search import search_news_for_scenario
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,44 @@ class SimulationOrchestrator:
             logger.error(f"Failed to derive social context: {e}")
             return ""
 
+    async def generate_survey_questions(self, scenario: str) -> List[Dict[str, Any]]:
+        """
+        Dynamically generate diagnostic survey questions based on the input scenario.
+        """
+        logger.info(f"Generating survey questions for scenario: {scenario[:50]}...")
+        
+        prompt = (
+            "You are an expert diagnostic consultant. A user has provided the following scenario for a social simulation:\n"
+            f"\"{scenario}\"\n\n"
+            "Generate 4 multiple-choice questions to deeply understand their specific motivation, "
+            "the relevant historical or news context they care about, and the desired strictness/safety of the bots.\n"
+            "Format the output as a valid JSON list of objects, where each object has:\n"
+            " - 'id': string (e.g., 'q1')\n"
+            " - 'question': string\n"
+            " - 'options': list of strings\n"
+        )
+        
+        try:
+            raw = await self.llm.chat([{"role": "user", "content": prompt}])
+            clean = raw.replace("```json", "").replace("```", "").strip()
+            questions = json.loads(clean)
+            return questions
+        except Exception as e:
+            logger.error(f"Failed to generate survey questions: {e}")
+            # Fallback questions
+            return [
+                {
+                    "id": "q1",
+                    "question": "What is your primary motivation for this simulation?",
+                    "options": ["Testing Policy", "Product Market Fit", "Campaign Effectiveness", "Historical What-If"]
+                },
+                {
+                    "id": "q2",
+                    "question": "How should the bots behave?",
+                    "options": ["Strictly data-driven & literal", "Creative & unpredictable", "Highly critical & skeptical", "Safety-conscious & restrained"]
+                }
+            ]
+
     async def initialize_world(
         self,
         scenario_prompt: str,
@@ -80,25 +121,36 @@ class SimulationOrchestrator:
                     {"type": "social_context"},
                 )
 
-        # Step 1: Expand scenario into world facts
-        expansion_prompt = (
-            "Expand this simulation scenario into a list of 10 distinct, interconnected facts "
-            "that define the world.\n"
+        logger.info("Extracting world facts...")
+        
+        # Real-Time Web Grounding
+        web_context = search_news_for_scenario(scenario_prompt)
+        
+        fact_prompt = (
+            "You are an AI world-builder. Based on the scenario and the recent web context below, "
+            "extract the key factual statements that define the situation.\n\n"
+            "Scenario:\n"
+            f"{scenario_prompt}\n\n"
+            "Real World Context (Recent News):\n"
+            f"{web_context}\n\n"
+            "Extract 5-8 foundational 'world facts' that describe the current state of this world, "
+            "including any known controversies or established positions.\n"
+            "Format as a valid JSON list of strings."
         )
         if social_context:
-            expansion_prompt += (
+            fact_prompt += (
                 "\nThe simulation should be grounded in this socio-economic reality:\n"
                 f"{social_context}\n\n"
                 "Ensure the facts reflect the demographics, economic pressures, social dynamics, "
                 "and political landscape described above.\n\n"
             )
-        expansion_prompt += (
+        fact_prompt += (
             "Format the output as a valid JSON list of strings.\n"
             "Scenario: " + scenario_prompt
         )
 
         try:
-            raw_facts = await self.llm.chat([{"role": "user", "content": expansion_prompt}])
+            raw_facts = await self.llm.chat([{"role": "user", "content": fact_prompt}])
             clean_facts_str = raw_facts.replace("```json", "").replace("```", "").strip()
             facts: List[str] = json.loads(clean_facts_str)
 
@@ -111,14 +163,24 @@ class SimulationOrchestrator:
             agent_prompt = (
                 "Based on these world facts: " + json.dumps(facts) + "\n"
                 f"Generate {num_agents} diverse agent personas.\n"
+                "IMPORTANT: All bots MUST be built to take into account official demographic statistics, recent news headlines, and history relevant to the scenario and social context.\n"
             )
             if social_context:
                 agent_prompt += (
-                    "The agents should reflect the socio-economic reality of this environment:\n"
+                    "The agents should reflect the socio-economic reality of this environment, including their constraints, arrogance/criticality as defined in the context:\n"
                     f"{social_context}\n\n"
                     "Give them realistic backgrounds, economic situations, and social positions "
                     "that create interesting dynamics and conflict potential.\n"
                 )
+                
+            bot_config_str = user_profile.get("social_factors", "") if user_profile else ""
+            if "DEVILS_ADVOCATE_MODE_ENABLED" in bot_config_str:
+                agent_prompt += (
+                    "CRITICAL: Ensure exactly ONE of the agents is a strict 'Devil's Advocate' / Anti-Persona. "
+                    "This agent MUST be ideologically opposed to the main premise, highly critical, deeply skeptical of everything, "
+                    "and specifically designed to intensely challenge the other agents to prevent an echo chamber.\n"
+                )
+            
             agent_prompt += (
                 "For each agent, provide: name, bio, and personality_traits.\n"
                 "Format as a valid JSON list of objects."
@@ -232,3 +294,44 @@ class SimulationOrchestrator:
         except Exception as e:
             logger.error(f"Failed to extract initial relationships: {e}")
             return {"nodes": [], "edges": []}
+
+    async def generate_sim_report(self, facts: List[str], feed: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Generate a final "GO" or "NO-GO" report based on the simulation results.
+        """
+        prompt = (
+            "You are an executive summary engine analyzing a social simulation to provide a definitive recommendation.\n\n"
+            "Here are the core World Facts that were simulated:\n"
+            f"{json.dumps(facts)}\n\n"
+            "Here is the chronological activity feed of the agents:\n"
+            f"{json.dumps(feed)}\n\n"
+            "Based on the outcome of these actions, the sentiment, and the arguments presented, "
+            "determine whether the scenario/policy/product is a 'GO' or randomly a 'NO-GO'. Be highly critical.\n"
+            "Return a SINGLE valid JSON object (no markdown, no code blocks) with the following structure:\n"
+            "{\n"
+            '  "decision": "GO" or "NO-GO",\n'
+            '  "summary": "A concise paragraph explaining the final verdict.",\n'
+            '  "key_takeaways": ["Point 1", "Point 2", "Point 3"],\n'
+            '  "analytics": {\n'
+            '    "sentiment_trend": [{"round": 1, "sentiment": "positive", "score": 80}],\n'
+            '    "opinion_distribution": {"pro": 2, "anti": 1, "neutral": 0},\n'
+            '    "opinion_shifts": [{"agent": "Name", "from": "anti", "to": "pro", "reason": "..."}]\n'
+            '  }\n'
+            "}"
+        )
+        try:
+            raw = await self.llm.chat([{"role": "user", "content": prompt}])
+            clean = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean)
+        except Exception as e:
+            logger.error(f"Failed to generate simulation report: {e}")
+            return {
+                "decision": "NO-GO",
+                "summary": "Failed to generate a conclusive report due to an AI error.",
+                "key_takeaways": [],
+                "analytics": {
+                    "sentiment_trend": [],
+                    "opinion_distribution": {"pro": 0, "anti": 0, "neutral": 0},
+                    "opinion_shifts": []
+                }
+            }
