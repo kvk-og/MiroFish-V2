@@ -11,17 +11,20 @@ class InghamClient:
     Direct client for Ingham API (Gemma 4).
     """
     def __init__(self):
-        self.api_key = os.getenv("LLM_API_KEY")
-        self.base_url = os.getenv("LLM_BASE_URL")
-        self.model = os.getenv("LLM_MODEL_NAME")
+        self.api_key = os.getenv("LLM_API_KEY") or os.getenv("VLLM_API_KEY")
+        self.base_url = os.getenv("LLM_BASE_URL") or os.getenv("VLLM_BASE_URL")
+        self.model = os.getenv("LLM_MODEL_NAME") or os.getenv("LLM_MODEL")
+        self.max_tokens = int(os.getenv("MAX_TOKENS") or os.getenv("LLM_MAX_TOKENS") or 4096)
         
         if not self.api_key or not self.base_url:
             raise ValueError("Ingham API credentials missing in .env")
 
-    async def chat(self, messages: List[Dict[str, str]], temperature: float = 0.7, max_retries: int = 3) -> str:
+    async def chat(self, messages: List[Dict[str, str]], temperature: float = 0.7, max_tokens: int = None, max_retries: int = 3) -> str:
         """
         Sends a chat completion request to Ingham API with exponential backoff.
         """
+        if max_tokens is None:
+            max_tokens = self.max_tokens
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -30,7 +33,8 @@ class InghamClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature
+            "temperature": temperature,
+            "max_tokens": max_tokens
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
